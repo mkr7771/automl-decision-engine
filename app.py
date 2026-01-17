@@ -93,7 +93,7 @@ def analyze_dataset(df, target_col, date_col, horizon_days):
 
 # --- MAIN APP LAYOUT ---
 
-st.title("🤖 Intelligent AutoML Decision Engine")
+st.title("🤖 PRECISION IN PREDICTION : POWER BI VS. AZURE AUTO ML FOR BI DECISIONS ")
 st.markdown("Upload your time-series dataset to find the best tool: **Power BI** or **Azure ML**.")
 st.divider()
 
