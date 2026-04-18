@@ -122,7 +122,7 @@ if uploaded_file:
 
         with col2:
             st.subheader("📋 Data Preview")
-            st.dataframe(df.head(5), use_container_width=True)
+            st.dataframe(df.head(5), width='stretch')
             st.caption(f"Total Rows: {len(df):,} | Total Columns: {len(df.columns)}")
 
         # 2. RUN LOGIC ON BUTTON CLICK
