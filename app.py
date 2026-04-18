@@ -6,45 +6,39 @@ from statsmodels.tsa.stattools import acf
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="AutoML Decision Engine", page_icon="🤖", layout="wide")
 
-# --- CSS STYLING ---
+# --- CSS STYLING (For visual appeal) ---
 st.markdown("""
     <style>
     .big-font { font-size:20px !important; }
-    .success-box { padding:15px; background-color:#d4edda; color:#155724; border-radius:10px; margin-bottom: 20px;}
-    .azure-box { padding:15px; background-color:#cce5ff; color:#004085; border-radius:10px; margin-bottom: 20px;}
+    .success-box { padding:15px; background-color:#d4edda; color:#155724; border-radius:10px; }
+    .azure-box { padding:15px; background-color:#cce5ff; color:#004085; border-radius:10px; }
     </style>
 """, unsafe_allow_html=True)
 
 # --- HELPER FUNCTIONS ---
 
-@st.cache_data
-def load_data(file):
-    """Caches the dataset so it doesn't reload on every button click."""
-    return pd.read_csv(file)
-
-def check_seasonality(series, frequency='Daily'):
+def check_seasonality(series):
     """
-    Intelligently checks for seasonality using Autocorrelation (ACF) based on data frequency.
+    Intelligently checks for seasonality using Autocorrelation (ACF).
+    Returns True if a strong pattern (like weekly/monthly) is detected.
     """
     try:
+        # Drop NaNs and ensure numeric
         clean_series = pd.to_numeric(series, errors='coerce').dropna()
-        if len(clean_series) < 36: # Ensure enough data points exist
-            return False 
+        if len(clean_series) < 50: return False # Not enough data
         
-        acf_values = acf(clean_series, nlags=55, fft=True)
+        # Calculate ACF (correlation with past versions of itself)
+        # We look at lag 7 (Weekly) or 30 (Monthly) for spikes
+        acf_values = acf(clean_series, nlags=40, fft=True)
         
-        if frequency == 'Daily':
-            return (acf_values[7] > 0.3) or (any(acf_values[28:32] > 0.3))
-        elif frequency == 'Weekly':
-            return acf_values[52] > 0.3 if len(acf_values) > 52 else False
-        elif frequency == 'Monthly':
-            return acf_values[12] > 0.3 if len(acf_values) > 12 else False
-            
+        # If correlation at lag 7 or 30 is high (> 0.3), seasonality exists
+        if (acf_values[7] > 0.3) or (any(acf_values[28:32] > 0.3)):
+            return True
         return False
-    except Exception:
+    except:
         return False
 
-def analyze_dataset(df, target_col, date_col, entity_col, horizon_days, frequency):
+def analyze_dataset(df, target_col, date_col, horizon_days):
     """
     The Core Decision Logic Gates.
     """
@@ -52,17 +46,25 @@ def analyze_dataset(df, target_col, date_col, entity_col, horizon_days, frequenc
     score_azure = 0
     
     # --- GATE 1: MULTIVARIATE COMPLEXITY ---
-    feature_cols = [c for c in df.columns if c not in [target_col, date_col, entity_col]]
+    # We count columns that are NOT the date or the target
+    feature_cols = [c for c in df.columns if c not in [target_col, date_col]]
+    
+    # If there are more than 2 extra features (e.g., Price, Promo, Holiday) -> Azure
     if len(feature_cols) > 2:
         score_azure += 1
-        reasons.append(f"📊 **Multivariate Data Detected:** Found {len(feature_cols)} extra features (e.g., {', '.join(feature_cols[:2])}). Power BI works best with simple trends; Azure handles complex correlations better.")
+        reasons.append(f"📊 **Multivariate Data Detected:** Found {len(feature_cols)} extra features ({', '.join(feature_cols[:3])}...). Power BI works best with simple trends; Azure handles complex correlations better.")
     
     # --- GATE 2: GRANULARITY (MANY MODELS) ---
-    if entity_col != "None" and entity_col in df.columns:
-        unique_count = df[entity_col].nunique()
-        if unique_count > 10:
-            score_azure += 1
-            reasons.append(f"🏪 **High Granularity:** You are forecasting {unique_count} distinct entities in '{entity_col}'. Training separate models simultaneously requires Azure's 'Many Models' accelerator.")
+    # Check for categorical columns that might define different products/stores
+    potential_ids = [c for c in feature_cols if df[c].nunique() > 1 and df[c].dtype == 'object']
+    
+    if len(potential_ids) > 0:
+        # If any column has more than 10 unique items (e.g., 50 Stores), PBI struggles
+        for col in potential_ids:
+            if df[col].nunique() > 10:
+                score_azure += 1
+                reasons.append(f"🏪 **High Granularity:** The column '{col}' has {df[col].nunique()} unique items. Training {df[col].nunique()} separate models requires Azure's 'Many Models' accelerator.")
+                break
 
     # --- GATE 3: DATA VOLUME ---
     if len(df) > 500000:
@@ -70,27 +72,28 @@ def analyze_dataset(df, target_col, date_col, entity_col, horizon_days, frequenc
         reasons.append(f"💾 **High Volume:** Dataset has {len(df):,} rows. Power BI may hit timeout limits during training.")
 
     # --- GATE 4: HISTORY vs HORIZON RATIO ---
+    # Ensure date column is datetime
     try:
-        df_dates = pd.to_datetime(df[date_col])
-        history_days = (df_dates.max() - df_dates.min()).days
+        df[date_col] = pd.to_datetime(df[date_col])
+        history_days = (df[date_col].max() - df[date_col].min()).days
         if history_days > 0:
             ratio = horizon_days / history_days
-            if ratio > 0.25: 
+            if ratio > 0.25: # Predicting too far into the future
                 score_azure += 1
-                reasons.append(f"🔭 **Long Horizon:** Predicting {horizon_days} days ahead with only {history_days} days of history requires Azure's Deep Learning (Prophet/TCN) for stability.")
+                reasons.append(f"🔭 **Long Horizon:** You want to predict {horizon_days} days ahead, but only have {history_days} days of history. This requires Azure's Deep Learning (Prophet/TCN) for stability.")
     except Exception as e:
-        reasons.append(f"⚠️ Could not calculate Date logic: Please ensure your date column is formatted correctly.")
+        reasons.append(f"⚠️ Could not calculate Date logic: {e}")
 
     # --- GATE 5: SEASONALITY ---
-    is_seasonal = check_seasonality(df[target_col], frequency)
+    is_seasonal = check_seasonality(df[target_col])
     if is_seasonal and score_azure > 0:
-        reasons.append(f"🌊 **Complex Seasonality:** Strong recurring {frequency.lower()} patterns detected alongside other complexities.")
+        reasons.append("🌊 **Complex Seasonality:** Strong recurring patterns detected alongside other complexities.")
 
     return score_azure, reasons
 
 # --- MAIN APP LAYOUT ---
 
-st.title("🤖 Intelligent AutoML Decision Engine")
+st.title("🤖 PRECISION IN PREDICTION : POWER BI VS. AZURE AUTO ML FOR BI DECISIONS ")
 st.markdown("Upload your time-series dataset to find the best tool: **Power BI** or **Azure ML**.")
 st.divider()
 
@@ -98,49 +101,43 @@ st.divider()
 uploaded_file = st.file_uploader("Upload CSV File", type=['csv'])
 
 if uploaded_file:
+    # Load Data
     try:
-        df = load_data(uploaded_file)
+        df = pd.read_csv(uploaded_file)
         
+        # Split Layout for Inputs
         col1, col2 = st.columns([1, 2])
         
         with col1:
             st.subheader("⚙️ Configuration")
+            # Select Columns
             all_cols = df.columns.tolist()
-            
-            # Selectors
             date_col = st.selectbox("Select Date Column", all_cols)
             target_col = st.selectbox("Select Target (Prediction) Column", [c for c in all_cols if c != date_col])
-            entity_col = st.selectbox("Group By (Optional - e.g., Store ID)", ["None"] + [c for c in all_cols if c not in [date_col, target_col]])
             
-            # Forecasting Parameters
-            frequency = st.selectbox("Data Frequency", ["Daily", "Weekly", "Monthly"])
-            horizon = st.number_input("Forecast Horizon (Days/Periods)", min_value=1, value=30)
+            # Select Horizon
+            horizon = st.number_input("Forecast Horizon (Days)", min_value=1, value=30)
             
-            run_btn = st.button("Analyze Dataset", type="primary", use_container_width=True)
+            run_btn = st.button("Analyze Dataset", type="primary")
 
         with col2:
-            st.subheader("📋 Data Preview & Trend")
-            st.dataframe(df.head(4), use_container_width=True)
-            
-            # Simple EDA Line Chart
-            try:
-                chart_data = df.groupby(date_col)[target_col].sum().reset_index()
-                chart_data = chart_data.set_index(date_col)
-                st.line_chart(chart_data)
-            except Exception:
-                st.caption("Could not render time-series chart. Ensure Target column is numeric.")
-                
+            st.subheader("📋 Data Preview")
+            st.dataframe(df.head(5), use_container_width=True)
             st.caption(f"Total Rows: {len(df):,} | Total Columns: {len(df.columns)}")
 
-        # 2. RUN LOGIC
+        # 2. RUN LOGIC ON BUTTON CLICK
         if run_btn:
             st.divider()
-            with st.spinner('Running logic gates...'):
-                score, reasons = analyze_dataset(df, target_col, date_col, entity_col, horizon, frequency)
+            with st.spinner('Running logic gates... checking multivariate complexity, seasonality, and volume...'):
                 
+                # Execute the "Brain" Function
+                score, reasons = analyze_dataset(df, target_col, date_col, horizon)
+                
+                # 3. DISPLAY RESULTS
                 st.header("🎯 Recommendation")
                 
                 if score >= 1:
+                    # AZURE RECOMMENDATION
                     st.markdown(f"""
                         <div class="azure-box">
                             <h2>🔵 Recommended Tool: Azure Machine Learning</h2>
@@ -148,6 +145,7 @@ if uploaded_file:
                         </div>
                     """, unsafe_allow_html=True)
                 else:
+                    # POWER BI RECOMMENDATION
                     st.markdown("""
                         <div class="success-box">
                             <h2>📊 Recommended Tool: Power BI AutoML</h2>
@@ -155,9 +153,10 @@ if uploaded_file:
                         </div>
                     """, unsafe_allow_html=True)
 
+                # 4. SHOW DETAILED REASONS
                 st.subheader("📝 Technical Analysis")
                 if not reasons:
-                    st.info("✅ Simple Univariate Data detected. No complex external factors or extreme granularity found.")
+                    st.info("✅ Simple Univariate Data detected. No complex external factors found.")
                 else:
                     for r in reasons:
                         st.write(r)
