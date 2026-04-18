@@ -1,8 +1,4 @@
 streamlit
 pandas
-<<<<<<< HEAD
-statsmodels
-=======
 statsmodels
 numpy
->>>>>>> f9229313e50305b3584ee9c3a47739a8f5385c8f
