@@ -121,9 +121,19 @@ if uploaded_file:
             run_btn = st.button("Analyze Dataset", type="primary")
 
         with col2:
-            st.subheader("📋 Data Preview")
-            st.dataframe(df.head(5), width='stretch')
-            st.caption(f"Total Rows: {len(df):,} | Total Columns: {len(df.columns)}")
+            st.subheader("📋 Data Preview & Trend")
+            st.dataframe(df.head(5), use_container_width=True)
+            
+            # --- NEW: ADDING THE LINE CHART ---
+            try:
+                # Group by date and sum the target to create a clean trend line
+                chart_data = df.groupby(date_col)[target_col].sum().reset_index()
+                chart_data.set_index(date_col, inplace=True)
+                st.line_chart(chart_data) # This command draws the chart
+            except Exception:
+                st.caption("⚠️ Could not render trend chart. Ensure your Target column is numeric.")
+                
+            st.caption(f"Total Rows: {len(df):,} | Total Columns: {len(df.columns)}")   
 
         # 2. RUN LOGIC ON BUTTON CLICK
         if run_btn:
